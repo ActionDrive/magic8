@@ -8,36 +8,51 @@ workflows:
       vars:
         AI_BASE_URL: "https://restless-haze-e206.1808812.workers.dev/"
     scripts:
-      - name: Set up project
-        script: |
-          flutter --version
-          flutter create . --org com.morozov
-          flutter pub get
+  - name: Set up project
+    script: |
+      flutter --version
+      flutter create . --org com.morozov
+      flutter pub get
 
-          # Gradle: больше памяти + AndroidX
-          mkdir -p android
-          echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx1024m -Dfile.encoding=UTF-8" >> android/gradle.properties
-          echo "android.useAndroidX=true" >> android/gradle.properties
-          echo "android.enableJetifier=true" >> android/gradle.properties
+      # Gradle: больше памяти + AndroidX
+      mkdir -p android
+      echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx1024m -Dfile.encoding=UTF-8" >> android/gradle.properties
+      echo "android.useAndroidX=true" >> android/gradle.properties
+      echo "android.enableJetifier=true" >> android/gradle.properties
 
-      - name: Generate launcher icons
-        script: |
-          dart run flutter_launcher_icons
+      # ---- ANDROID FIX: выравниваем версии Kotlin/AGP/Gradle ----
+      # Kotlin 1.8.22
+      perl -0777 -pe "s/ext\.kotlin_version\s*=\s*['\"][^'\"]+['\"]/ext.kotlin_version = '1.8.22'/g" -i android/build.gradle
 
-      - name: Build Android debug (arm64 only)
-        script: |
-          flutter build apk --debug --target-platform=android-arm64 \
-            --dart-define=AI_BASE_URL=$AI_BASE_URL
+      # AGP 7.4.2
+      perl -0777 -pe "s/classpath\s+['\"]com\.android\.tools\.build:gradle:[^'\"]+['\"]/classpath 'com.android.tools.build:gradle:7.4.2'/g" -i android/build.gradle
 
-      - name: Build Android release (split-per-abi)
-        script: |
-          flutter build apk --release --split-per-abi \
-            --dart-define=AI_BASE_URL=$AI_BASE_URL
+      # Gradle wrapper 7.6
+      sed -i.bak "s#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-7.6-all.zip#g" android/gradle/wrapper/gradle-wrapper.properties
 
-      - name: Build iOS release (no codesign)
-        script: |
-          flutter build ios --release --no-codesign \
-            --dart-define=AI_BASE_URL=$AI_BASE_URL
+      # compileSdk 34, minSdk 21
+      perl -0777 -pe "s/compileSdkVersion\s+\d+/compileSdkVersion 34/g" -i android/app/build.gradle
+      perl -0777 -pe "s/minSdkVersion\s+\d+/minSdkVersion 21/g" -i android/app/build.gradle
+      # ------------------------------------------------------------
+
+  - name: Generate launcher icons
+    script: |
+      dart run flutter_launcher_icons
+
+  - name: Build Android debug (arm64 only)
+    script: |
+      flutter build apk --debug --target-platform=android-arm64 \
+        --dart-define=AI_BASE_URL=$AI_BASE_URL
+
+  - name: Build Android release (split-per-abi)
+    script: |
+      flutter build apk --release --split-per-abi \
+        --dart-define=AI_BASE_URL=$AI_BASE_URL
+
+  - name: Build iOS release (no codesign)
+    script: |
+      flutter build ios --release --no-codesign \
+        --dart-define=AI_BASE_URL=$AI_BASE_URL
 
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
