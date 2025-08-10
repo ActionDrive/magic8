@@ -8,60 +8,62 @@ workflows:
       java: 11
       vars:
         AI_BASE_URL: "https://restless-haze-e206.1808812.workers.dev/"
-scripts:
-  
-     - name: Set up project
-       script: |
-        set -e
-        flutter --version
-        flutter create . --org com.morozov
-        flutter pub get
-        # Gradle: больше памяти + AndroidX/Jetifier
-        mkdir -p android
-        echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx1024m -Dfile.encoding=UTF-8" >> android/gradle.properties
-        echo "android.useAndroidX=true" >> android/gradle.properties
-        echo "android.enableJetifier=true" >> android/gradle.properties
-        # ---------- ПРИВОДИМ KTS К AGP 7.4.2 (под Java 11) ----------
-        # Gradle wrapper 7.6
-        sed -i.bak "s#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-7.6-all.zip#g" android/gradle/wrapper/gradle-wrapper.properties || true
-        # build.gradle.kts (корневой): понижаем плагины
-        if [ -f "android/build.gradle.kts" ]; then
-        sed -i.bak 's/id("com.android.application") version "[^"]*"/id("com.android.application") version "7.4.2"/' android/build.gradle.kts || true
-        sed -i.bak 's/id("com.android.library") version "[^"]*"/id("com.android.library") version "7.4.2"/' android/build.gradle.kts || true
-        sed -i.bak 's/id("org.jetbrains.kotlin.android") version "[^"]*"/id("org.jetbrains.kotlin.android") version "1.8.22"/' android/build.gradle.kts || true
-        fi
-        # build.gradle (groovy) на всякий случай
-        perl -0777 -pe "s/classpath\\s+['\"]com\\.android\\.tools\\.build:gradle:[^'\\\"]+['\"]/classpath 'com.android.tools.build:gradle:7.4.2'/g" -i android/build.gradle || true
-        perl -0777 -pe "s/ext\\.kotlin_version\\s*=\\s*['\\\"][^'\\\"]+['\\\"]/ext.kotlin_version = '1.8.22'/g" -i android/build.gradle || true
-        # app/build.gradle.kts: compileSdk/minSdk + jvmTarget
-        if [ -f "android/app/build.gradle.kts" ]; then
-        sed -i.bak 's/compileSdk\\s*=\\s*[0-9]\\+/compileSdk = 34/' android/app/build.gradle.kts || true
-        sed -i.bak 's/minSdk\\s*=\\s*[0-9]\\+/minSdk = 21/' android/app/build.gradle.kts || true
-        # вставляем kotlinOptions/compileOptions если отсутствуют
-        if ! grep -q "kotlinOptions" android/app/build.gradle.kts; then
-          awk '1; /android\\s*\\{/ && !p {print "    compileOptions {"; print "        sourceCompatibility = JavaVersion.VERSION_1_8"; print "        targetCompatibility = JavaVersion.VERSION_1_8"; print "    }"; print "    kotlinOptions {"; print "        jvmTarget = \"1.8\""; print "    }"; p=1}' android/app/build.gradle.kts > /tmp/app.gradle.kts && mv /tmp/app.gradle.kts android/app/build.gradle.kts
-        fi
-        fi
-        # app/build.gradle (groovy) на всякий случай
-        perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i android/app/build.gradle || true
-        perl -0777 -pe "s/minSdkVersion\\s+\\d+/minSdkVersion 21/g" -i android/app/build.gradle || true
-        if ! grep -q "kotlinOptions" android/app/build.gradle 2>/dev/null; then
-        perl -0777 -pe "s/android\\s*\\{/\$&\\n    compileOptions {\\n        sourceCompatibility JavaVersion.VERSION_1_8\\n        targetCompatibility JavaVersion.VERSION_1_8\\n    }\\n    kotlinOptions {\\n        jvmTarget = '1.8'\\n    }\\n/g" -i android/app/build.gradle || true
-        fi
-      # -------------------------------------------------------------
-     - name: Generate launcher icons
-       script: |
-        set -e
-        dart run flutter_launcher_icons
-     - name: Build Android debug (arm64 only)
-       script: |
-        set -e
-        flutter build apk --debug --target-platform=android-arm64 \
-        --dart-define=AI_BASE_URL=$AI_BASE_URL
-     - name: Build Android release (split-per-abi)
-       script: |
-        set -e
-        flutter build apk --release --split-per-abi \
-        --dart-define=AI_BASE_URL=$AI_BASE_URL
-        artifacts:
-        - build/app/outputs/flutter-apk/*.apk
+    scripts:
+      - name: Echo start
+        script: |
+          echo ">>> WORKFLOW build_android STARTED"
+
+      - name: Set up project
+        script: |
+          set -e
+          flutter --version
+          flutter create . --org com.morozov
+          flutter pub get
+          mkdir -p android
+          echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx1024m -Dfile.encoding=UTF-8" >> android/gradle.properties
+          echo "android.useAndroidX=true" >> android/gradle.properties
+          echo "android.enableJetifier=true" >> android/gradle.properties
+          # Приводим KTS к AGP 7.4.2 / Kotlin 1.8.22 / Gradle 7.6
+          sed -i.bak "s#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-7.6-all.zip#g" android/gradle/wrapper/gradle-wrapper.properties || true
+          if [ -f "android/build.gradle.kts" ]; then
+            sed -i.bak 's/id("com.android.application") version "[^"]*"/id("com.android.application") version "7.4.2"/' android/build.gradle.kts || true
+            sed -i.bak 's/id("com.android.library") version "[^"]*"/id("com.android.library") version "7.4.2"/' android/build.gradle.kts || true
+            sed -i.bak 's/id("org.jetbrains.kotlin.android") version "[^"]*"/id("org.jetbrains.kotlin.android") version "1.8.22"/' android/build.gradle.kts || true
+          fi
+          perl -0777 -pe "s/classpath\\s+['\"]com\\.android\\.tools\\.build:gradle:[^'\\\"]+['\\\"]/classpath 'com.android.tools.build:gradle:7.4.2'/g" -i android/build.gradle || true
+          perl -0777 -pe "s/ext\\.kotlin_version\\s*=\\s*['\\\"][^'\\\"]+['\\\"]/ext.kotlin_version = '1.8.22'/g" -i android/build.gradle || true
+          if [ -f "android/app/build.gradle.kts" ]; then
+            sed -i.bak 's/compileSdk\\s*=\\s*[0-9]\\+/compileSdk = 34/' android/app/build.gradle.kts || true
+            sed -i.bak 's/minSdk\\s*=\\s*[0-9]\\+/minSdk = 21/' android/app/build.gradle.kts || true
+            grep -q "kotlinOptions" android/app/build.gradle.kts || awk '1; /android\\s*\\{/ && !p {print "    compileOptions {"; print "        sourceCompatibility = JavaVersion.VERSION_1_8"; print "        targetCompatibility = JavaVersion.VERSION_1_8"; print "    }"; print "    kotlinOptions {"; print "        jvmTarget = \\"1.8\\""; print "    }"; p=1}' android/app/build.gradle.kts > /tmp/a && mv /tmp/a android/app/build.gradle.kts
+          fi
+          perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i android/app/build.gradle || true
+          perl -0777 -pe "s/minSdkVersion\\s+\\d+/minSdkVersion 21/g" -i android/app/build.gradle || true
+          grep -q "kotlinOptions" android/app/build.gradle 2>/dev/null || perl -0777 -pe "s/android\\s*\\{/\$&\\n    compileOptions {\\n        sourceCompatibility JavaVersion.VERSION_1_8\\n        targetCompatibility JavaVersion.VERSION_1_8\\n    }\\n    kotlinOptions {\\n        jvmTarget = '1.8'\\n    }\\n/g" -i android/app/build.gradle || true
+
+      - name: Generate launcher icons
+        script: |
+          dart run flutter_launcher_icons
+
+      - name: Build Android debug (arm64 only)
+        script: |
+          set -e
+          flutter build apk --debug --target-platform=android-arm64 \
+            --dart-define=AI_BASE_URL=$AI_BASE_URL
+          ls -lah build/app/outputs/flutter-apk || true
+
+      - name: Build Android release (split-per-abi)
+        script: |
+          set -e
+          flutter build apk --release --split-per-abi \
+            --dart-define=AI_BASE_URL=$AI_BASE_URL
+          ls -lah build/app/outputs/flutter-apk || true
+
+      - name: Ensure APKs exist
+        script: |
+          set -e
+          ls build/app/outputs/flutter-apk/*.apk
+          echo ">>> APK files found."
+
+    artifacts:
+      - build/app/outputs/flutter-apk/*.apk
