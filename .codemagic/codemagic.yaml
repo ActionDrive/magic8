@@ -4,10 +4,8 @@ workflows:
     environment:
       flutter: stable
       xcode: latest
-      vars:
-        AI_BASE_URL: ${AI_BASE_URL}
-        AI_KEY: ${AI_KEY}
-        AI_MODEL: gpt-4o-mini
+      groups:
+        - magic8     # это имя группы, которую ты создашь во вкладке Environment variables
     scripts:
       - flutter --version
       - flutter create . --org com.morozov
