@@ -1,0 +1,32 @@
+name: magic8
+description: Волшебный шар — shake-to-ask с голосом и ИИ
+publish_to: "none"
+version: 0.2.2+4
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  sensors_plus: ^5.0.0
+  flutter_tts: ^3.8.3
+  speech_to_text: ^6.6.2
+  flutter_riverpod: ^2.5.1
+  http: ^1.2.2
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/app_icon.png
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/ball.jpg
+    - assets/app_icon.png

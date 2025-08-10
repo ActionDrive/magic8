@@ -1,0 +1,1 @@
+Microphone is used for speech recognition. If AI mode is enabled, your text question is sent to your configured AI provider via your proxy. We do not collect or sell personal data.
