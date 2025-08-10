@@ -9,7 +9,7 @@ workflows:
         AI_BASE_URL: "https://restless-haze-e206.1808812.workers.dev/"
     scripts:
   - name: Set up project
-    script: |
+script: |
       flutter --version
       flutter create . --org com.morozov
       flutter pub get
