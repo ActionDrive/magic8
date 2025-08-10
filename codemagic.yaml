@@ -2,52 +2,65 @@ workflows:
   magic8_release:
     name: Magic8 Release iOS & Android
     environment:
-      groups:
-        - magic8
       flutter: stable
       xcode: latest
+      groups:
+        - magic8        # <- в Codemagic должна быть группа magic8 c AI_BASE_URL, AI_MODEL, AI_KEY
     scripts:
       - flutter --version
       - flutter create . --org com.morozov
       - flutter pub get
       - dart run flutter_launcher_icons
+
+      # iOS: права на микрофон и распознавание речи
       - |
-        # iOS: разрешения на микрофон/распознавание речи
-        /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'Для распознавания вопросов голосом'" ios/Runner/Info.plist
-        /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Для записи вашего вопроса'" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c 'Add :NSSpeechRecognitionUsageDescription string "Для распознавания вопросов голосом"' ios/Runner/Info.plist || /usr/libexec/PlistBuddy -c 'Set :NSSpeechRecognitionUsageDescription "Для распознавания вопросов голосом"' ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c 'Add :NSMicrophoneUsageDescription string "Для записи вашего вопроса"' ios/Runner/Info.plist || /usr/libexec/PlistBuddy -c 'Set :NSMicrophoneUsageDescription "Для записи вашего вопроса"' ios/Runner/Info.plist
+
+      # ANDROID: кладём валидный AndroidManifest.xml
       - |
-        # ANDROID: перезаписываем манифест
-        cat > android/app/src/main/AndroidManifest.xml <<'XML'
-        <?xml version="1.0" encoding="utf-8"?>
-        <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-            package="com.morozov.magic8">
+          cat > android/app/src/main/AndroidManifest.xml <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.morozov.magic8">
             <uses-permission android:name="android.permission.INTERNET"/>
             <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+
             <application
                 android:label="Magic 8"
                 android:name="${applicationName}"
                 android:icon="@mipmap/ic_launcher"
                 android:usesCleartextTraffic="true">
-                <activity
-                    android:name=".MainActivity"
-                    android:exported="true"
-                    android:launchMode="singleTop"
-                    android:theme="@style/LaunchTheme"
-                    android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-                    android:hardwareAccelerated="true"
-                    android:windowSoftInputMode="adjustResize">
-                    <meta-data
-                        android:name="io.flutter.embedding.android.NormalTheme"
-                        android:resource="@style/NormalTheme"
-                        />
-                    <intent-filter>
-                        <action android:name="android.intent.action.MAIN"/>
-                        <category android:name="android.intent.category.LAUNCHER"/>
-                    </intent-filter>
-                </activity>
+              <activity
+                  android:name=".MainActivity"
+                  android:exported="true"
+                  android:launchMode="singleTop"
+                  android:theme="@style/LaunchTheme"
+                  android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                  android:hardwareAccelerated="true"
+                  android:windowSoftInputMode="adjustResize">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN"/>
+                  <category android:name="android.intent.category.LAUNCHER"/>
+                </intent-filter>
+              </activity>
+
+              <meta-data
+                  android:name="io.flutter.embedding.android.NormalTheme"
+                  android:resource="@style/NormalTheme" />
+              <meta-data
+                  android:name="flutterEmbedding"
+                  android:value="2" />
             </application>
-        </manifest>
-        XML
+          </manifest>
+          XML
+
+      # СБОРКИ
+      - flutter build apk --debug  --dart-define=AI_BASE_URL=$AI_BASE_URL --dart-define=AI_KEY=$AI_KEY --dart-define=AI_MODEL=$AI_MODEL
+      - flutter build apk --release --dart-define=AI_BASE_URL=$AI_BASE_URL --dart-define=AI_KEY=$AI_KEY --dart-define=AI_MODEL=$AI_MODEL
+      - flutter build ios --release --no-codesign --dart-define=AI_BASE_URL=$AI_BASE_URL --dart-define=AI_KEY=$AI_KEY --dart-define=AI_MODEL=$AI_MODEL
+
     artifacts:
-      - build/**/outputs/**/*.apk
-      - build/**/outputs/**/*.ipa
+      - build/app/outputs/flutter-apk/app-debug.apk
+      - build/app/outputs/flutter-apk/app-release.apk
+      - build/ios/iphoneos/*.app
