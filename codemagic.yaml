@@ -8,7 +8,7 @@ workflows:
       java: 11
       vars:
         AI_BASE_URL: "https://restless-haze-e206.1808812.workers.dev/"
-scripts:
+  scripts:
   - name: Set up project
     script: |
       set -e
