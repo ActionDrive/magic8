@@ -1,6 +1,6 @@
 workflows:
   build_android:
-    name: Build Android APKs (AGP8 / Gradle 8.9)
+    name: Build Android APKs (AGP8/Gradle8.9 + deps upgrade)
     max_build_duration: 60
     environment:
       flutter: stable
@@ -11,26 +11,39 @@ workflows:
     scripts:
       - name: Echo start
         script: |
-          echo ">>> WORKFLOW build_android STARTED (AGP8/Gradle8.9/Java17)"
+          echo ">>> START build_android"
 
-      - name: Set up project
+      - name: Set up Flutter project (create platforms)
         script: |
           set -e
           flutter --version
-          # ЯВНО создаём платформы (если их нет)
           flutter create . --platforms=android,ios --org com.morozov
+
+      - name: Upgrade Dart/Flutter deps (fix speech_to_text & sensors_plus)
+        script: |
+          set -e
+          # Обновим версии прямо в pubspec.yaml (если они там есть)
+          if grep -q "speech_to_text:" pubspec.yaml; then
+            sed -i.bak 's/speech_to_text:[[:space:]]*^.*/speech_to_text: ^7.2.0/' pubspec.yaml || true
+          fi
+          if grep -q "sensors_plus:" pubspec.yaml; then
+            sed -i.bak 's/sensors_plus:[[:space:]]*^.*/sensors_plus: ^6.0.1/' pubspec.yaml || true
+          fi
+          # Универсальный апгрейд зависимостей (на случай иных несовместимостей)
+          flutter pub upgrade --major-versions
           flutter pub get
 
-          # Gradle: больше памяти + AndroidX/Jetifier
+      - name: Android toolchain: Gradle 8.9 + AGP 8.1.4 + Kotlin 1.9.22 + memory
+        script: |
+          set -e
           mkdir -p android
           echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx2048m -Dfile.encoding=UTF-8" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
 
-          # ---------- ПРИВОДИМ К СВЯЗКЕ: Gradle 8.9 + AGP 8.1.4 + Kotlin 1.9.22 ----------
-          # Gradle wrapper -> 8.9
+          # Gradle wrapper → 8.9
           if [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
-            sed -i.bak "s#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-all.zip#g" android/gradle/wrapper/gradle-wrapper.properties || true
+            sed -i.bak "s#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-all.zip#g" android/gradle/wrapper/gradle-wrapper.properties
           fi
 
           # Корневой build.gradle.kts (если есть): AGP/Kotlin
@@ -40,7 +53,7 @@ workflows:
             sed -i.bak 's/id("org.jetbrains.kotlin.android") version "[^"]*"/id("org.jetbrains.kotlin.android") version "1.9.22"/' android/build.gradle.kts || true
           fi
 
-          # Корневой build.gradle (groovy) на всякий случай
+          # Корневой build.gradle (groovy) — на всякий случай
           if [ -f android/build.gradle ]; then
             perl -0777 -pe "s/classpath\\s+['\"]com\\.android\\.tools\\.build:gradle:[^'\\\"]+['\\\"]/classpath 'com.android.tools.build:gradle:8.1.4'/g" -i android/build.gradle || true
             perl -0777 -pe "s/ext\\.kotlin_version\\s*=\\s*['\\\"][^'\\\"]+['\\\"]/ext.kotlin_version = '1.9.22'/g" -i android/build.gradle || true
@@ -57,7 +70,7 @@ workflows:
             fi
           fi
 
-          # app/build.gradle (groovy) на всякий случай
+          # app/build.gradle (groovy): на случай groovy-шаблона
           if [ -f android/app/build.gradle ]; then
             perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i android/app/build.gradle || true
             perl -0777 -pe "s/minSdkVersion\\s+\\d+/minSdkVersion 21/g" -i android/app/build.gradle || true
@@ -73,7 +86,6 @@ workflows:
               perl -0777 -pe "s/android\\s*\\{/\$&\\n    kotlinOptions {\\n        jvmTarget = '17'\\n    }\\n/g" -i android/app/build.gradle || true
             fi
           fi
-          # -------------------------------------------------------------------
 
       - name: Generate launcher icons
         script: |
