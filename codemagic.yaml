@@ -8,23 +8,36 @@ workflows:
       vars:
         AI_BASE_URL: "https://restless-haze-e206.1808812.workers.dev/"
     scripts:
-      - name: Generate launcher icons
-        script: |
-          flutter pub get
-          dart run flutter_launcher_icons
+  - name: Set up project
+    script: |
+      flutter --version
+      flutter create . --org com.morozov
+      flutter pub get
 
-      - name: Build Android debug
-        script: |
-          flutter build apk --debug --dart-define=AI_BASE_URL=$AI_BASE_URL
+      # Gradle: больше памяти + AndroidX
+      mkdir -p android
+      echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx1024m -Dfile.encoding=UTF-8" >> android/gradle.properties
+      echo "android.useAndroidX=true" >> android/gradle.properties
+      echo "android.enableJetifier=true" >> android/gradle.properties
 
-      - name: Build Android release
-        script: |
-          flutter build apk --release --dart-define=AI_BASE_URL=$AI_BASE_URL
+  - name: Generate launcher icons
+    script: |
+      dart run flutter_launcher_icons
 
-      - name: Build iOS release (no codesign)
-        script: |
-          flutter build ios --release --no-codesign --dart-define=AI_BASE_URL=$AI_BASE_URL
+  - name: Build Android debug (arm64 only)
+    script: |
+      flutter build apk --debug --target-platform=android-arm64 \
+        --dart-define=AI_BASE_URL=$AI_BASE_URL
 
+  - name: Build Android release (split-per-abi)
+    script: |
+      flutter build apk --release --split-per-abi \
+        --dart-define=AI_BASE_URL=$AI_BASE_URL
+
+  - name: Build iOS release (no codesign)
+    script: |
+      flutter build ios --release --no-codesign \
+        --dart-define=AI_BASE_URL=$AI_BASE_URL
     artifacts:
       - build/**/outputs/**/*.apk
       - build/**/outputs/**/*.ipa
