@@ -1,66 +1,55 @@
 workflows:
-  magic8_release:
+  magic8-release:
     name: Magic8 Release iOS & Android
+    max_build_duration: 60
     environment:
       flutter: stable
       xcode: latest
+      cocoapods: default
+      java: 11
       groups:
-        - magic8        # <- в Codemagic должна быть группа magic8 c AI_BASE_URL, AI_MODEL, AI_KEY
+        - keystore_credentials
+        - appstore_credentials
+      vars:
+        AI_BASE_URL: "https://your-ai-server.com"
+        AI_KEY: "your_ai_key"
+        AI_MODEL: "gpt-4"
     scripts:
-      - flutter --version
-      - flutter create . --org com.morozov
-      - flutter pub get
-      - dart run flutter_launcher_icons
+      - name: Set up Flutter
+        script: |
+          flutter --version
+          flutter create . --org com.morozov
+          flutter pub get
+          dart run flutter_launcher_icons
 
-      # iOS: права на микрофон и распознавание речи
-      - |
-          /usr/libexec/PlistBuddy -c 'Add :NSSpeechRecognitionUsageDescription string "Для распознавания вопросов голосом"' ios/Runner/Info.plist || /usr/libexec/PlistBuddy -c 'Set :NSSpeechRecognitionUsageDescription "Для распознавания вопросов голосом"' ios/Runner/Info.plist
-          /usr/libexec/PlistBuddy -c 'Add :NSMicrophoneUsageDescription string "Для записи вашего вопроса"' ios/Runner/Info.plist || /usr/libexec/PlistBuddy -c 'Set :NSMicrophoneUsageDescription "Для записи вашего вопроса"' ios/Runner/Info.plist
+          # Увеличиваем память для Gradle и включаем AndroidX
+          mkdir -p android
+          echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx1024m -Dfile.encoding=UTF-8" >> android/gradle.properties
+          echo "android.useAndroidX=true" >> android/gradle.properties
+          echo "android.enableJetifier=true" >> android/gradle.properties
 
-      # ANDROID: кладём валидный AndroidManifest.xml
-      - |
-          cat > android/app/src/main/AndroidManifest.xml <<'XML'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.morozov.magic8">
-            <uses-permission android:name="android.permission.INTERNET"/>
-            <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+      - name: Build Android debug (arm64 only)
+        script: |
+          flutter build apk --debug --target-platform=android-arm64 \
+            --dart-define=AI_BASE_URL=$AI_BASE_URL \
+            --dart-define=AI_KEY=$AI_KEY \
+            --dart-define=AI_MODEL=$AI_MODEL
 
-            <application
-                android:label="Magic 8"
-                android:name="${applicationName}"
-                android:icon="@mipmap/ic_launcher"
-                android:usesCleartextTraffic="true">
-              <activity
-                  android:name=".MainActivity"
-                  android:exported="true"
-                  android:launchMode="singleTop"
-                  android:theme="@style/LaunchTheme"
-                  android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-                  android:hardwareAccelerated="true"
-                  android:windowSoftInputMode="adjustResize">
-                <intent-filter>
-                  <action android:name="android.intent.action.MAIN"/>
-                  <category android:name="android.intent.category.LAUNCHER"/>
-                </intent-filter>
-              </activity>
+      - name: Build Android release (split-per-abi)
+        script: |
+          flutter build apk --release --split-per-abi \
+            --dart-define=AI_BASE_URL=$AI_BASE_URL \
+            --dart-define=AI_KEY=$AI_KEY \
+            --dart-define=AI_MODEL=$AI_MODEL
 
-              <meta-data
-                  android:name="io.flutter.embedding.android.NormalTheme"
-                  android:resource="@style/NormalTheme" />
-              <meta-data
-                  android:name="flutterEmbedding"
-                  android:value="2" />
-            </application>
-          </manifest>
-          XML
-
-      # СБОРКИ
-      - flutter build apk --debug  --dart-define=AI_BASE_URL=$AI_BASE_URL --dart-define=AI_KEY=$AI_KEY --dart-define=AI_MODEL=$AI_MODEL
-      - flutter build apk --release --dart-define=AI_BASE_URL=$AI_BASE_URL --dart-define=AI_KEY=$AI_KEY --dart-define=AI_MODEL=$AI_MODEL
-      - flutter build ios --release --no-codesign --dart-define=AI_BASE_URL=$AI_BASE_URL --dart-define=AI_KEY=$AI_KEY --dart-define=AI_MODEL=$AI_MODEL
+      - name: Build iOS release
+        script: |
+          flutter build ios --release --no-codesign \
+            --dart-define=AI_BASE_URL=$AI_BASE_URL \
+            --dart-define=AI_KEY=$AI_KEY \
+            --dart-define=AI_MODEL=$AI_MODEL
 
     artifacts:
-      - build/app/outputs/flutter-apk/app-debug.apk
-      - build/app/outputs/flutter-apk/app-release.apk
-      - build/ios/iphoneos/*.app
+      - build/**/outputs/**/*.apk
+      - build/**/outputs/**/*.ipa
+      - build/**/outputs/**/app-release.aab
