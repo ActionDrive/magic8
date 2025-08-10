@@ -1,61 +1,85 @@
 workflows:
-  build_app:
-    name: Build Android & iOS (Simple)
+  build_android:
+    name: Build Android APKs (stable)
     max_build_duration: 60
     environment:
       flutter: stable
       xcode: latest
+      java: 11
       vars:
         AI_BASE_URL: "https://restless-haze-e206.1808812.workers.dev/"
+        # (опционально) Телега: если задашь оба, файлы улетят ботом
+        TG_BOT_TOKEN: ""
+        TG_CHAT_ID: ""
     scripts:
-  - name: Set up project
-script: |
-      flutter --version
-      flutter create . --org com.morozov
-      flutter pub get
+      - name: Set up project
+        script: |
+          set -e
+          flutter --version
+          flutter create . --org com.morozov
+          flutter pub get
 
-      # Gradle: больше памяти + AndroidX
-      mkdir -p android
-      echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx1024m -Dfile.encoding=UTF-8" >> android/gradle.properties
-      echo "android.useAndroidX=true" >> android/gradle.properties
-      echo "android.enableJetifier=true" >> android/gradle.properties
+          # Gradle: больше памяти + AndroidX/Jetifier
+          mkdir -p android
+          echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx1024m -Dfile.encoding=UTF-8" >> android/gradle.properties
+          echo "android.useAndroidX=true" >> android/gradle.properties
+          echo "android.enableJetifier=true" >> android/gradle.properties
 
-      # ---------- ANDROID FIX: Kotlin/AGP/Gradle + jvmTarget ----------
-      # Kotlin 1.8.22
-      perl -0777 -pe "s/ext\.kotlin_version\s*=\s*['\"][^'\"]+['\"]/ext.kotlin_version = '1.8.22'/g" -i android/build.gradle
+          # ---- ANDROID TOOLCHAIN: согласуем версии под Java 11 ----
+          # Kotlin 1.8.22
+          perl -0777 -pe "s/ext\.kotlin_version\s*=\s*['\"][^'\"]+['\"]/ext.kotlin_version = '1.8.22'/g" -i android/build.gradle || true
+          # Android Gradle Plugin 7.4.2
+          perl -0777 -pe "s/classpath\s+['\"]com\.android\.tools\.build:gradle:[^'\"]+['\"]/classpath 'com.android.tools.build:gradle:7.4.2'/g" -i android/build.gradle || true
+          # Gradle wrapper 7.6
+          sed -i.bak "s#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-7.6-all.zip#g" android/gradle/wrapper/gradle-wrapper.properties || true
 
-      # Android Gradle Plugin 7.4.2
-      perl -0777 -pe "s/classpath\s+['\"]com\.android\.tools\.build:gradle:[^'\"]+['\"]/classpath 'com.android.tools.build:gradle:7.4.2'/g" -i android/build.gradle
+          # compileSdk / minSdk
+          perl -0777 -pe "s/compileSdkVersion\s+\d+/compileSdkVersion 34/g" -i android/app/build.gradle || true
+          perl -0777 -pe "s/minSdkVersion\s+\d+/minSdkVersion 21/g" -i android/app/build.gradle || true
 
-      # Gradle wrapper 7.6
-      sed -i.bak "s#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-7.6-all.zip#g" android/gradle/wrapper/gradle-wrapper.properties
+          # kotlinOptions { jvmTarget = '1.8' } + Java 1.8 совместимость
+          if ! grep -q "kotlinOptions" android/app/build.gradle; then
+            perl -0777 -pe "s/android\s*\{/\$&\n    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_1_8\n        targetCompatibility JavaVersion.VERSION_1_8\n    }\n    kotlinOptions {\n        jvmTarget = '1.8'\n    }\n/g" -i android/app/build.gradle || true
+          fi
+          # ----------------------------------------------------------
 
-      # compileSdk 34 / minSdk 21
-      perl -0777 -pe "s/compileSdkVersion\s+\d+/compileSdkVersion 34/g" -i android/app/build.gradle
-      perl -0777 -pe "s/minSdkVersion\s+\d+/minSdkVersion 21/g" -i android/app/build.gradle
+      - name: Generate launcher icons
+        script: |
+          set -e
+          dart run flutter_launcher_icons
 
-      # jvmTarget=1.8 + Java 1.8 совместимость
-      perl -0777 -pe "s/android\s*\{/\$&\n    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_1_8\n        targetCompatibility JavaVersion.VERSION_1_8\n    }\n    kotlinOptions {\n        jvmTarget = '1.8'\n    }\n/ if $.==1" -i android/app/build.gradle
-      # ----------------------------------------------------------------
+      - name: Build Android debug (arm64 only)
+        script: |
+          set -e
+          flutter build apk --debug --target-platform=android-arm64 \
+            --dart-define=AI_BASE_URL=$AI_BASE_URL
 
-  - name: Generate launcher icons
-    script: |
-      dart run flutter_launcher_icons
+      - name: Build Android release (split-per-abi)
+        script: |
+          set -e
+          flutter build apk --release --split-per-abi \
+            --dart-define=AI_BASE_URL=$AI_BASE_URL
 
-  - name: Build Android debug (arm64 only)
-    script: |
-      flutter build apk --debug --target-platform=android-arm64 \
-        --dart-define=AI_BASE_URL=$AI_BASE_URL
+      - name: (optional) Upload APKs to Telegram
+        script: |
+          set -e
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            BOT="https://api.telegram.org/bot$TG_BOT_TOKEN"
+            send_file() {
+              local f="$1"
+              [ -f "$f" ] || return 0
+              echo "Uploading $f to Telegram…"
+              curl -s -f -X POST "$BOT/sendDocument" \
+                   -F chat_id="$TG_CHAT_ID" \
+                   -F caption="$(basename "$f")" \
+                   -F document="@$f" >/dev/null
+            }
+            for f in build/app/outputs/flutter-apk/*.apk; do
+              send_file "$f"
+            done
+          else
+            echo "TG_BOT_TOKEN / TG_CHAT_ID не заданы — пропускаю загрузку в Telegram."
+          fi
 
-  - name: Build Android release (split-per-abi)
-    script: |
-      flutter build apk --release --split-per-abi \
-        --dart-define=AI_BASE_URL=$AI_BASE_URL
-
-  - name: Build iOS release (no codesign)
-    script: |
-      flutter build ios --release --no-codesign \
-        --dart-define=AI_BASE_URL=$AI_BASE_URL
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
-      - build/ios/iphoneos/*.app
