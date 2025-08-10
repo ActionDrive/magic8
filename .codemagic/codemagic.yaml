@@ -1,70 +1,79 @@
 workflows:
   build_android:
-    name: Build Android APKs (stable)
+    name: Build Android APKs (AGP8 / Gradle 8.9)
     max_build_duration: 60
     environment:
       flutter: stable
       xcode: latest
-      java: 11
+      java: 17
       vars:
         AI_BASE_URL: "https://restless-haze-e206.1808812.workers.dev/"
     scripts:
       - name: Echo start
         script: |
-          echo ">>> WORKFLOW build_android STARTED"
+          echo ">>> WORKFLOW build_android STARTED (AGP8/Gradle8.9/Java17)"
 
       - name: Set up project
         script: |
           set -e
           flutter --version
-
           # ЯВНО создаём платформы (если их нет)
           flutter create . --platforms=android,ios --org com.morozov
           flutter pub get
 
           # Gradle: больше памяти + AndroidX/Jetifier
           mkdir -p android
-          echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx1024m -Dfile.encoding=UTF-8" >> android/gradle.properties
+          echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx2048m -Dfile.encoding=UTF-8" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
 
-          # ---------- ПРИВОДИМ АНДРОИД-КОНФИГ К СВЯЗКЕ JAVA11 ----------
-          # Gradle wrapper -> 7.6
+          # ---------- ПРИВОДИМ К СВЯЗКЕ: Gradle 8.9 + AGP 8.1.4 + Kotlin 1.9.22 ----------
+          # Gradle wrapper -> 8.9
           if [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
-            sed -i.bak "s#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-7.6-all.zip#g" android/gradle/wrapper/gradle-wrapper.properties || true
+            sed -i.bak "s#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-all.zip#g" android/gradle/wrapper/gradle-wrapper.properties || true
           fi
 
           # Корневой build.gradle.kts (если есть): AGP/Kotlin
           if [ -f android/build.gradle.kts ]; then
-            sed -i.bak 's/id("com.android.application") version "[^"]*"/id("com.android.application") version "7.4.2"/' android/build.gradle.kts || true
-            sed -i.bak 's/id("com.android.library") version "[^"]*"/id("com.android.library") version "7.4.2"/' android/build.gradle.kts || true
-            sed -i.bak 's/id("org.jetbrains.kotlin.android") version "[^"]*"/id("org.jetbrains.kotlin.android") version "1.8.22"/' android/build.gradle.kts || true
+            sed -i.bak 's/id("com.android.application") version "[^"]*"/id("com.android.application") version "8.1.4"/' android/build.gradle.kts || true
+            sed -i.bak 's/id("com.android.library") version "[^"]*"/id("com.android.library") version "8.1.4"/' android/build.gradle.kts || true
+            sed -i.bak 's/id("org.jetbrains.kotlin.android") version "[^"]*"/id("org.jetbrains.kotlin.android") version "1.9.22"/' android/build.gradle.kts || true
           fi
 
           # Корневой build.gradle (groovy) на всякий случай
           if [ -f android/build.gradle ]; then
-            perl -0777 -pe "s/classpath\\s+['\"]com\\.android\\.tools\\.build:gradle:[^'\\\"]+['\\\"]/classpath 'com.android.tools.build:gradle:7.4.2'/g" -i android/build.gradle || true
-            perl -0777 -pe "s/ext\\.kotlin_version\\s*=\\s*['\\\"][^'\\\"]+['\\\"]/ext.kotlin_version = '1.8.22'/g" -i android/build.gradle || true
+            perl -0777 -pe "s/classpath\\s+['\"]com\\.android\\.tools\\.build:gradle:[^'\\\"]+['\\\"]/classpath 'com.android.tools.build:gradle:8.1.4'/g" -i android/build.gradle || true
+            perl -0777 -pe "s/ext\\.kotlin_version\\s*=\\s*['\\\"][^'\\\"]+['\\\"]/ext.kotlin_version = '1.9.22'/g" -i android/build.gradle || true
           fi
 
-          # app/build.gradle.kts: compileSdk/minSdk + kotlinOptions/compileOptions
+          # app/build.gradle.kts: compileSdk/minSdk + Java/Kotlin 17
           if [ -f android/app/build.gradle.kts ]; then
             sed -i.bak 's/compileSdk\\s*=\\s*[0-9]\\+/compileSdk = 34/' android/app/build.gradle.kts || true
             sed -i.bak 's/minSdk\\s*=\\s*[0-9]\\+/minSdk = 21/' android/app/build.gradle.kts || true
             if ! grep -q "kotlinOptions" android/app/build.gradle.kts; then
-              awk '1; /android\\s*\\{/ && !p {print "    compileOptions {"; print "        sourceCompatibility = JavaVersion.VERSION_1_8"; print "        targetCompatibility = JavaVersion.VERSION_1_8"; print "    }"; print "    kotlinOptions {"; print "        jvmTarget = \\"1.8\\""; print "    }"; p=1}' android/app/build.gradle.kts > /tmp/app.kts && mv /tmp/app.kts android/app/build.gradle.kts
+              awk '1; /android\\s*\\{/ && !p {print "    compileOptions {"; print "        sourceCompatibility = JavaVersion.VERSION_17"; print "        targetCompatibility = JavaVersion.VERSION_17"; print "    }"; print "    kotlinOptions {"; print "        jvmTarget = \\"17\\""; print "    }"; p=1}' android/app/build.gradle.kts > /tmp/app.kts && mv /tmp/app.kts android/app/build.gradle.kts
+            else
+              sed -i.bak 's/jvmTarget\\s*=\\s*"[0-9\\.]\\+"/jvmTarget = "17"/' android/app/build.gradle.kts || true
             fi
           fi
 
-          # app/build.gradle (groovy): compileSdk/minSdk + kotlinOptions/compileOptions
+          # app/build.gradle (groovy) на всякий случай
           if [ -f android/app/build.gradle ]; then
             perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i android/app/build.gradle || true
             perl -0777 -pe "s/minSdkVersion\\s+\\d+/minSdkVersion 21/g" -i android/app/build.gradle || true
-            if ! grep -q "kotlinOptions" android/app/build.gradle; then
-              perl -0777 -pe "s/android\\s*\\{/\$&\\n    compileOptions {\\n        sourceCompatibility JavaVersion.VERSION_1_8\\n        targetCompatibility JavaVersion.VERSION_1_8\\n    }\\n    kotlinOptions {\\n        jvmTarget = '1.8'\\n    }\\n/g" -i android/app/build.gradle || true
+            if grep -q "compileOptions" android/app/build.gradle; then
+              perl -0777 -pe "s/sourceCompatibility\\s+JavaVersion\\.VERSION_\\d+_/sourceCompatibility JavaVersion.VERSION_17/g" -i android/app/build.gradle || true
+              perl -0777 -pe "s/targetCompatibility\\s+JavaVersion\\.VERSION_\\d+_/targetCompatibility JavaVersion.VERSION_17/g" -i android/app/build.gradle || true
+            else
+              perl -0777 -pe "s/android\\s*\\{/\$&\\n    compileOptions {\\n        sourceCompatibility JavaVersion.VERSION_17\\n        targetCompatibility JavaVersion.VERSION_17\\n    }\\n/g" -i android/app/build.gradle || true
+            fi
+            if grep -q "kotlinOptions" android/app/build.gradle; then
+              perl -0777 -pe "s/jvmTarget\\s*=\\s*'?[0-9\\.]+'?/jvmTarget = '17'/g" -i android/app/build.gradle || true
+            else
+              perl -0777 -pe "s/android\\s*\\{/\$&\\n    kotlinOptions {\\n        jvmTarget = '17'\\n    }\\n/g" -i android/app/build.gradle || true
             fi
           fi
-          # -------------------------------------------------------------
+          # -------------------------------------------------------------------
 
       - name: Generate launcher icons
         script: |
