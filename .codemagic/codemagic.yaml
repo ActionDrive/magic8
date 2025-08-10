@@ -8,9 +8,6 @@ workflows:
       java: 11
       vars:
         AI_BASE_URL: "https://restless-haze-e206.1808812.workers.dev/"
-        # (опционально) Телега: если задашь оба, файлы улетят ботом
-        TG_BOT_TOKEN: ""
-        TG_CHAT_ID: ""
     scripts:
       - name: Set up project
         script: |
@@ -26,22 +23,14 @@ workflows:
           echo "android.enableJetifier=true" >> android/gradle.properties
 
           # ---- ANDROID TOOLCHAIN: согласуем версии под Java 11 ----
-          # Kotlin 1.8.22
           perl -0777 -pe "s/ext\.kotlin_version\s*=\s*['\"][^'\"]+['\"]/ext.kotlin_version = '1.8.22'/g" -i android/build.gradle || true
-          # Android Gradle Plugin 7.4.2
           perl -0777 -pe "s/classpath\s+['\"]com\.android\.tools\.build:gradle:[^'\"]+['\"]/classpath 'com.android.tools.build:gradle:7.4.2'/g" -i android/build.gradle || true
-          # Gradle wrapper 7.6
           sed -i.bak "s#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-7.6-all.zip#g" android/gradle/wrapper/gradle-wrapper.properties || true
-
-          # compileSdk / minSdk
           perl -0777 -pe "s/compileSdkVersion\s+\d+/compileSdkVersion 34/g" -i android/app/build.gradle || true
           perl -0777 -pe "s/minSdkVersion\s+\d+/minSdkVersion 21/g" -i android/app/build.gradle || true
-
-          # kotlinOptions { jvmTarget = '1.8' } + Java 1.8 совместимость
           if ! grep -q "kotlinOptions" android/app/build.gradle; then
             perl -0777 -pe "s/android\s*\{/\$&\n    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_1_8\n        targetCompatibility JavaVersion.VERSION_1_8\n    }\n    kotlinOptions {\n        jvmTarget = '1.8'\n    }\n/g" -i android/app/build.gradle || true
           fi
-          # ----------------------------------------------------------
 
       - name: Generate launcher icons
         script: |
@@ -63,7 +52,8 @@ workflows:
       - name: (optional) Upload APKs to Telegram
         script: |
           set -e
-          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+          # Выполнится только если переменные заданы в Environment variables
+          if [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ]; then
             BOT="https://api.telegram.org/bot$TG_BOT_TOKEN"
             send_file() {
               local f="$1"
