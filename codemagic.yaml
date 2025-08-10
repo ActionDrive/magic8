@@ -33,7 +33,7 @@ workflows:
           flutter pub upgrade --major-versions
           flutter pub get
 
-      - name: Android toolchain: Gradle 8.9 + AGP 8.1.4 + Kotlin 1.9.22 + memory
+      - name: "Android toolchain: Gradle 8.9 + AGP 8.1.4 + Kotlin 1.9.22 + memory"
         script: |
           set -e
           mkdir -p android
