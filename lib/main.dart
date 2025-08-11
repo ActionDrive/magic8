@@ -1,207 +1,320 @@
-import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:sensors_plus/sensors_plus.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:flutter_tts/flutter_tts.dart';
-import 'services/answer_engine.dart';
-import 'settings.dart';
-import 'l10n.dart';
+import 'package:http/http.dart' as http;
 
-void main() {
-  runApp(const ProviderScope(child: Magic8App()));
-}
+void main() => runApp(const Magic8App());
 
-class Magic8App extends ConsumerWidget {
+// Берём базовый URL прокси из --dart-define (Codemagic его уже пробрасывает)
+const _aiBaseUrl = String.fromEnvironment('AI_BASE_URL', defaultValue: '');
+
+class Magic8App extends StatelessWidget {
   const Magic8App({super.key});
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final settings = ref.watch(settingsProvider);
-    final themeMode = settings?.themeMode ?? ThemeMode.system;
+  Widget build(BuildContext context) {
     return MaterialApp(
+      title: 'Волшебный шар',
       debugShowCheckedModeBanner: false,
-      title: 'Magic 8',
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo, brightness: Brightness.light),
-      darkTheme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo, brightness: Brightness.dark),
-      themeMode: themeMode,
-      home: settings == null ? const Scaffold(body: Center(child: CircularProgressIndicator())) : const HomeScreen(),
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        useMaterial3: true,
+      ),
+      home: const Magic8Screen(),
     );
   }
 }
 
-final speechProvider = Provider<stt.SpeechToText>((ref) => stt.SpeechToText());
-final ttsProvider = Provider<FlutterTts>((ref) => FlutterTts());
-
-class HomeScreen extends ConsumerStatefulWidget {
-  const HomeScreen({super.key});
+class Magic8Screen extends StatefulWidget {
+  const Magic8Screen({super.key});
   @override
-  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+  State<Magic8Screen> createState() => _Magic8ScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProviderStateMixin {
-  StreamSubscription? _accelSub;
-  double _shakeThreshold = 18;
-  DateTime _lastShake = DateTime.fromMillisecondsSinceEpoch(0);
-  final _controller = TextEditingController();
-  bool _listening = false;
-  String? _lastAnswer;
-  late final AnimationController _anim;
+class _Magic8ScreenState extends State<Magic8Screen>
+    with SingleTickerProviderStateMixin {
+  final TextEditingController _questionCtrl = TextEditingController();
+  final List<String> _fallbackAnswers = const [
+    'Да', 'Нет', 'Скорее да', 'Скорее нет',
+    'Спроси позже', 'Есть сомнения', 'Определённо да', 'Определённо нет'
+  ];
+
+  late final AnimationController _c;
+  late final Animation<double> _rot;
   late final Animation<double> _scale;
+
+  String _answer = '';
+  bool _loading = false;
 
   @override
   void initState() {
     super.initState();
-    _anim = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
-    _scale = CurvedAnimation(parent: _anim, curve: Curves.easeOutBack);
-    _accelSub = accelerometerEventStream().listen((event) {
-      final magnitude = sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
-      if (magnitude > _shakeThreshold) {
-        final now = DateTime.now();
-        if (now.difference(_lastShake).inMilliseconds > 1200) {
-          _lastShake = now;
-          _onAsk();
-        }
-      }
-    });
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+    _rot = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 0.22), weight: 18),
+      TweenSequenceItem(tween: Tween(begin: 0.22, end: -0.18), weight: 22),
+      TweenSequenceItem(tween: Tween(begin: -0.18, end: 0.10), weight: 20),
+      TweenSequenceItem(tween: Tween(begin: 0.10, end: 0.0), weight: 40),
+    ]).animate(CurvedAnimation(parent: _c, curve: Curves.easeOut));
+    _scale = TweenSequence<double>([
+      TweenSequenceItem(
+          tween: Tween(begin: 1.0, end: 0.92).chain(CurveTween(curve: Curves.easeOut)), weight: 30),
+      TweenSequenceItem(
+          tween: Tween(begin: 0.92, end: 1.04).chain(CurveTween(curve: Curves.easeOutBack)), weight: 40),
+      TweenSequenceItem(tween: Tween(begin: 1.04, end: 1.0), weight: 30),
+    ]).animate(_c);
   }
 
   @override
   void dispose() {
-    _accelSub?.cancel();
-    _controller.dispose();
-    _anim.dispose();
+    _c.dispose();
+    _questionCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _onAsk() async {
-    HapticFeedback.lightImpact();
-    final engine = ref.read(engineProvider);
-    final tts = ref.read(ttsProvider);
-    final settings = ref.read(settingsProvider)!;
-    final text = _controller.text.trim();
-    final question = text.isEmpty ? null : text;
-    setState(() => _lastAnswer = "…");
-    _anim.forward(from: 0);
-    final answer = await engine.answer(question: question, settings: settings);
-    setState(() => _lastAnswer = answer);
-    try {
-      await tts.setLanguage(settings.locale.startsWith('ru') ? 'ru-RU' : 'en-US');
-      await tts.speak(answer);
-    } catch (_) {}
+  Future<void> _shakeAndAnswer() async {
+    if (_loading) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _loading = true);
+    _c.forward(from: 0);
+
+    final q = _questionCtrl.text.trim().isEmpty
+        ? 'Дай короткий ответ, как в волшебном шаре: да/нет/сомневаюсь и т.п.'
+        : _questionCtrl.text.trim();
+
+    final ai = await _askAI(q);
+    setState(() {
+      _answer = ai ?? _randomFallback();
+      _loading = false;
+    });
   }
 
-  Future<void> _toggleVoice() async {
-    final speech = ref.read(speechProvider);
-    if (!_listening) {
-      bool available = await speech.initialize();
-      if (available) {
-        setState(() => _listening = true);
-        final localeId = ref.read(settingsProvider)!.locale.startsWith('ru') ? 'ru_RU' : 'en_US';
-        speech.listen(localeId: localeId, onResult: (res) => _controller.text = res.recognizedWords);
-      }
-    } else {
-      speech.stop();
-      setState(() => _listening = false);
+  String _randomFallback() {
+    final rnd = Random();
+    return _fallbackAnswers[rnd.nextInt(_fallbackAnswers.length)];
+  }
+
+  /// Запрос к твоему прокси. Возвращает короткий ответ или null при ошибке.
+  Future<String?> _askAI(String question) async {
+    if (_aiBaseUrl.isEmpty) return null;
+
+    // Варианты путей. Поставь первый рабочий в своём воркере и можно оставить один.
+    final tryEndpoints = <Uri>[
+      // 1) Классический роут под OpenAI совместимые прокси (chat completions):
+      Uri.parse('${_aiBaseUrl.replaceAll(RegExp(r"/$"), "")}/v1/chat/completions'),
+      // 2) Кастомный «/chat» (часто в Cloudflare Worker)
+      Uri.parse('${_aiBaseUrl.replaceAll(RegExp(r"/$"), "")}/chat'),
+      // 3) На случай, если прокси ожидает просто POST на корень
+      Uri.parse(_aiBaseUrl),
+    ];
+
+    final bodyOpenAI = {
+      "model": "gpt-4o-mini",
+      "temperature": 0.7,
+      "max_tokens": 60,
+      "messages": [
+        {"role": "system", "content": "Отвечай кратко как шар предсказаний (да/нет/сомневаюсь/переспрашивай позже и т.п.)."},
+        {"role": "user", "content": question}
+      ]
+    };
+
+    // Вариант для кастомного /chat
+    final bodyChat = {
+      "model": "gpt-4o-mini",
+      "prompt": question,
+      "max_tokens": 60,
+      "temperature": 0.7
+    };
+
+    for (final uri in tryEndpoints) {
+      try {
+        final isOpenAI = uri.path.contains('/v1/chat/completions');
+        final resp = await http
+            .post(
+              uri,
+              headers: const {
+                'Content-Type': 'application/json',
+                // Ключ не нужен – он лежит на прокси. Если у тебя требуется заголовок – добавь его тут.
+              },
+              body: jsonEncode(isOpenAI ? bodyOpenAI : bodyChat),
+            )
+            .timeout(const Duration(seconds: 25));
+
+        if (resp.statusCode >= 200 && resp.statusCode < 300) {
+          final json = jsonDecode(resp.body);
+
+          // Разбираем оба формата.
+          // OpenAI совместимый:
+          final openAiText = () {
+            try {
+              return (json['choices'][0]['message']['content'] as String?)?.trim();
+            } catch (_) {
+              return null;
+            }
+          }();
+
+          // Кастомный /chat:
+          final chatText = () {
+            try {
+              return (json['text'] as String?)?.trim();
+            } catch (_) {
+              return null;
+            }
+          }();
+
+          final text = openAiText ?? chatText;
+          if (text != null && text.isNotEmpty) {
+            // Оставим 1–2 предложения/короткую фразу
+            return text.split('\n').first.replaceAll(RegExp(r'\s+'), ' ').trim();
+          }
+        }
+      } catch (_) {/* пробуем следующий эндпоинт */}
     }
+    return null;
   }
 
   @override
   Widget build(BuildContext context) {
-    final settings = ref.watch(settingsProvider);
-    if (settings == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    final l10n = L10n(settings.locale);
-    return Scaffold(
-      appBar: AppBar(title: Text(l10n.t('app_title')), actions: [
-        IconButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen())), icon: const Icon(Icons.settings)),
-      ]),
-      body: SafeArea(
-        child: Column(
+    final topBar = SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+        child: Row(
           children: [
-            const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TextField(
-                controller: _controller,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _onAsk(),
-                decoration: InputDecoration(
-                  hintText: l10n.t('hint'),
-                  prefixIcon: IconButton(onPressed: _toggleVoice, icon: Icon(_listening ? Icons.mic : Icons.mic_none)),
-                  suffixIcon: IconButton(onPressed: _onAsk, icon: const Icon(Icons.send)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
             Expanded(
-              child: Center(
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(300),
-                      child: Image.asset('assets/ball.jpg', width: 260, height: 260, fit: BoxFit.cover),
-                    ),
-                    ScaleTransition(
-                      scale: _scale,
-                      child: Container(
-                        width: 160, height: 160,
-                        decoration: BoxDecoration(color: Colors.black.withOpacity(0.66), shape: BoxShape.circle, border: Border.all(color: Colors.white24)),
-                        alignment: Alignment.center, padding: const EdgeInsets.all(16),
-                        child: Text(_lastAnswer ?? l10n.t('shake'), key: ValueKey(_lastAnswer), textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-                      ),
-                    ),
-                  ],
+              child: TextField(
+                controller: _questionCtrl,
+                maxLines: 1,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _shakeAndAnswer(),
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: 'Сформулируй вопрос… затем нажми ►',
+                  hintStyle: const TextStyle(color: Colors.white70),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  filled: true,
+                  fillColor: Colors.black.withOpacity(0.18),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
                 ),
               ),
             ),
-            const SizedBox(height: 16),
-            Text(l10n.t('tap_or_shake'), style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 16),
+            const SizedBox(width: 8),
+            Material(
+              color: _loading
+                  ? Colors.grey
+                  : Theme.of(context).colorScheme.primary,
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: _loading ? null : _shakeAndAnswer,
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: _loading
+                      ? const SizedBox(
+                          width: 20, height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(Icons.send_rounded, color: Colors.white),
+                ),
+              ),
+            )
           ],
         ),
       ),
     );
-  }
-}
 
-class SettingsScreen extends ConsumerWidget {
-  const SettingsScreen({super.key});
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final s = ref.watch(settingsProvider)!;
-    final c = ref.read(settingsProvider.notifier);
-    final l10n = L10n(s.locale);
-    return Scaffold(
-      appBar: AppBar(title: Text(l10n.t('settings'))),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text(l10n.t('theme'), style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          SegmentedButton<ThemeMode>(
-            segments: const [
-              ButtonSegment(value: ThemeMode.system, label: Text('System')),
-              ButtonSegment(value: ThemeMode.dark, label: Text('Dark')),
-              ButtonSegment(value: ThemeMode.light, label: Text('Light')),
-            ],
-            selected: {s.themeMode},
-            onSelectionChanged: (set) => c.update(s.copyWith(themeMode: set.first)),
+    final ball = GestureDetector(
+      onTap: _loading ? null : _shakeAndAnswer,
+      child: AnimatedBuilder(
+        animation: _c,
+        builder: (context, child) {
+          return Transform.rotate(
+            angle: _rot.value,
+            child: Transform.scale(scale: _scale.value, child: child),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: AspectRatio(
+            aspectRatio: 1,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(blurRadius: 30, spreadRadius: 2, color: Colors.black.withOpacity(0.35))],
+              ),
+              child: ClipOval(
+                child: ColorFiltered(
+                  colorFilter: ColorFilter.mode(
+                    Colors.black.withOpacity(0.08),
+                    BlendMode.darken,
+                  ),
+                  child: Image.asset('assets/ball.jpg', fit: BoxFit.cover),
+                ),
+              ),
+            ),
           ),
-          const SizedBox(height: 24),
-          SwitchListTile(title: Text(l10n.t('ai_on')), value: s.aiOn, onChanged: (v) => c.update(s.copyWith(aiOn: v))),
-          TextField(decoration: InputDecoration(labelText: l10n.t('base_url'), hintText: 'https://your-proxy.workers.dev'), controller: TextEditingController(text: s.baseUrl), onSubmitted: (v) => c.update(s.copyWith(baseUrl: v))),
-          TextField(decoration: InputDecoration(labelText: l10n.t('api_key'), hintText: 'proxy-key (если нужен)'), controller: TextEditingController(text: s.apiKey), obscureText: true, onSubmitted: (v) => c.update(s.copyWith(apiKey: v))),
-          TextField(decoration: InputDecoration(labelText: l10n.t('model'), hintText: 'gpt-4o-mini'), controller: TextEditingController(text: s.model), onSubmitted: (v) => c.update(s.copyWith(model: v))),
-          const SizedBox(height: 16),
-          DropdownButtonFormField<String>(
-            value: s.locale, decoration: const InputDecoration(labelText: 'Language'),
-            items: const [
-              DropdownMenuItem(value: 'ru', child: Text('Русский')),
-              DropdownMenuItem(value: 'en', child: Text('English')),
-            ],
-            onChanged: (v) => c.update(s.copyWith(locale: v)),
+        ),
+      ),
+    );
+
+    final answerChip = AnimatedOpacity(
+      opacity: _answer.isEmpty ? 0 : 1,
+      duration: const Duration(milliseconds: 250),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.55),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withOpacity(0.22), width: 1),
+          boxShadow: [BoxShadow(blurRadius: 12, color: Colors.black.withOpacity(0.45))],
+        ),
+        child: Stack(
+          children: [
+            Text(
+              _answer,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                foreground: Paint()
+                  ..style = PaintingStyle.stroke
+                  ..strokeWidth = 2
+                  ..color = Colors.black.withOpacity(0.7),
+              ),
+            ),
+            Text(
+              _answer,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: Colors.white,
+                letterSpacing: 0.2,
+                height: 1.15,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0C0F13),
+      appBar: AppBar(title: const Text('Волшебный шар')),
+      body: Column(
+        children: [
+          topBar,
+          Expanded(
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Positioned.fill(child: Center(child: ball)),
+                Positioned(top: 90, left: 0, right: 0, child: answerChip),
+              ],
+            ),
           ),
         ],
       ),
