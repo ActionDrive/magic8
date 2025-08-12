@@ -1,118 +1,23 @@
 workflows:
-  build_android:
-    name: Build Android APKs (AGP8/Gradle8.9 + deps upgrade)
-    max_build_duration: 60
+  magic8-workflow:
+    name: Magic 8 Ball App
     environment:
       flutter: stable
-      xcode: latest
-      java: 17
       vars:
-        AI_BASE_URL: "https://restless-haze-e206.1808812.workers.dev/"
+        AI_BASE_URL: $AI_BASE_URL
     scripts:
-      - name: Echo start
+      - name: Install dependencies
+        script: flutter pub get
+      - name: Generate platform folders
+        script: flutter create .
+      - name: Add Android permissions
         script: |
-          echo ">>> START build_android"
-
-      - name: Set up Flutter project (create platforms)
+          sed -i '/<application/i\    <uses-permission android:name="android.permission.RECORD_AUDIO"/>' android/app/src/main/AndroidManifest.xml
+      - name: Add iOS permissions
         script: |
-          set -e
-          flutter --version
-          flutter create . --platforms=android,ios --org com.morozov
-
-      - name: Upgrade Dart/Flutter deps (fix speech_to_text & sensors_plus)
-        script: |
-          set -e
-          # Обновим версии прямо в pubspec.yaml (если они там есть)
-          if grep -q "speech_to_text:" pubspec.yaml; then
-            sed -i.bak 's/speech_to_text:[[:space:]]*^.*/speech_to_text: ^7.2.0/' pubspec.yaml || true
-          fi
-          if grep -q "sensors_plus:" pubspec.yaml; then
-            sed -i.bak 's/sensors_plus:[[:space:]]*^.*/sensors_plus: ^6.0.1/' pubspec.yaml || true
-          fi
-          # Универсальный апгрейд зависимостей (на случай иных несовместимостей)
-          flutter pub upgrade --major-versions
-          flutter pub get
-
-      - name: "Android toolchain: Gradle 8.9 + AGP 8.1.4 + Kotlin 1.9.22 + memory"
-        script: |
-          set -e
-          mkdir -p android
-          echo "org.gradle.jvmargs=-Xmx4608m -Dkotlin.daemon.jvm.options=-Xmx2048m -Dfile.encoding=UTF-8" >> android/gradle.properties
-          echo "android.useAndroidX=true" >> android/gradle.properties
-          echo "android.enableJetifier=true" >> android/gradle.properties
-
-          # Gradle wrapper → 8.9
-          if [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
-            sed -i.bak "s#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-all.zip#g" android/gradle/wrapper/gradle-wrapper.properties
-          fi
-
-          # Корневой build.gradle.kts (если есть): AGP/Kotlin
-          if [ -f android/build.gradle.kts ]; then
-            sed -i.bak 's/id("com.android.application") version "[^"]*"/id("com.android.application") version "8.1.4"/' android/build.gradle.kts || true
-            sed -i.bak 's/id("com.android.library") version "[^"]*"/id("com.android.library") version "8.1.4"/' android/build.gradle.kts || true
-            sed -i.bak 's/id("org.jetbrains.kotlin.android") version "[^"]*"/id("org.jetbrains.kotlin.android") version "1.9.22"/' android/build.gradle.kts || true
-          fi
-
-          # Корневой build.gradle (groovy) — на всякий случай
-          if [ -f android/build.gradle ]; then
-            perl -0777 -pe "s/classpath\\s+['\"]com\\.android\\.tools\\.build:gradle:[^'\\\"]+['\\\"]/classpath 'com.android.tools.build:gradle:8.1.4'/g" -i android/build.gradle || true
-            perl -0777 -pe "s/ext\\.kotlin_version\\s*=\\s*['\\\"][^'\\\"]+['\\\"]/ext.kotlin_version = '1.9.22'/g" -i android/build.gradle || true
-          fi
-
-          # app/build.gradle.kts: compileSdk/minSdk + Java/Kotlin 17
-          if [ -f android/app/build.gradle.kts ]; then
-            sed -i.bak 's/compileSdk\\s*=\\s*[0-9]\\+/compileSdk = 34/' android/app/build.gradle.kts || true
-            sed -i.bak 's/minSdk\\s*=\\s*[0-9]\\+/minSdk = 21/' android/app/build.gradle.kts || true
-            if ! grep -q "kotlinOptions" android/app/build.gradle.kts; then
-              awk '1; /android\\s*\\{/ && !p {print "    compileOptions {"; print "        sourceCompatibility = JavaVersion.VERSION_17"; print "        targetCompatibility = JavaVersion.VERSION_17"; print "    }"; print "    kotlinOptions {"; print "        jvmTarget = \\"17\\""; print "    }"; p=1}' android/app/build.gradle.kts > /tmp/app.kts && mv /tmp/app.kts android/app/build.gradle.kts
-            else
-              sed -i.bak 's/jvmTarget\\s*=\\s*"[0-9\\.]\\+"/jvmTarget = "17"/' android/app/build.gradle.kts || true
-            fi
-          fi
-
-          # app/build.gradle (groovy): на случай groovy-шаблона
-          if [ -f android/app/build.gradle ]; then
-            perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i android/app/build.gradle || true
-            perl -0777 -pe "s/minSdkVersion\\s+\\d+/minSdkVersion 21/g" -i android/app/build.gradle || true
-            if grep -q "compileOptions" android/app/build.gradle; then
-              perl -0777 -pe "s/sourceCompatibility\\s+JavaVersion\\.VERSION_\\d+_/sourceCompatibility JavaVersion.VERSION_17/g" -i android/app/build.gradle || true
-              perl -0777 -pe "s/targetCompatibility\\s+JavaVersion\\.VERSION_\\d+_/targetCompatibility JavaVersion.VERSION_17/g" -i android/app/build.gradle || true
-            else
-              perl -0777 -pe "s/android\\s*\\{/\$&\\n    compileOptions {\\n        sourceCompatibility JavaVersion.VERSION_17\\n        targetCompatibility JavaVersion.VERSION_17\\n    }\\n/g" -i android/app/build.gradle || true
-            fi
-            if grep -q "kotlinOptions" android/app/build.gradle; then
-              perl -0777 -pe "s/jvmTarget\\s*=\\s*'?[0-9\\.]+'?/jvmTarget = '17'/g" -i android/app/build.gradle || true
-            else
-              perl -0777 -pe "s/android\\s*\\{/\$&\\n    kotlinOptions {\\n        jvmTarget = '17'\\n    }\\n/g" -i android/app/build.gradle || true
-            fi
-          fi
-
-      - name: Generate launcher icons
-        script: |
-          set -e
-          dart run flutter_launcher_icons
-
-      - name: Build Android debug (arm64 only)
-        script: |
-          set -e
-          flutter build apk --debug --target-platform=android-arm64 \
-            --dart-define=AI_BASE_URL=$AI_BASE_URL
-          echo ">>> Debug APKs:"
-          ls -lah build/app/outputs/flutter-apk || true
-
-      - name: Build Android release (split-per-abi)
-        script: |
-          set -e
-          flutter build apk --release --split-per-abi \
-            --dart-define=AI_BASE_URL=$AI_BASE_URL
-          echo ">>> Release APKs:"
-          ls -lah build/app/outputs/flutter-apk || true
-
-      - name: Ensure APKs exist
-        script: |
-          set -e
-          ls build/app/outputs/flutter-apk/*.apk
-          echo ">>> APK files found."
-
+          plutil -insert NSSpeechRecognitionUsageDescription -string "Для распознавания голосовых вопросов" ios/Runner/Info.plist
+          plutil -insert NSMicrophoneUsageDescription -string "Для записи вашего вопроса" ios/Runner/Info.plist
+      - name: Build APK
+        script: flutter build apk --release --split-per-abi
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
